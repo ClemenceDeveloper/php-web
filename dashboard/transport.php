@@ -21,7 +21,6 @@ if(isset($_GET['accept']) && isset($_GET['request_id'])) {
         $stmt->execute([$transport_id, $request_id]);
         
         if($stmt->rowCount() > 0) {
-            // Get order details to update order status
             $stmt = $pdo->prepare("SELECT order_id FROM transport_requests WHERE id = ?");
             $stmt->execute([$request_id]);
             $request = $stmt->fetch();
@@ -47,12 +46,10 @@ if(isset($_GET['complete']) && isset($_GET['request_id'])) {
         $stmt->execute([$request_id, $transport_id]);
         
         if($stmt->rowCount() > 0) {
-            // Get order details
             $stmt = $pdo->prepare("SELECT order_id FROM transport_requests WHERE id = ?");
             $stmt->execute([$request_id]);
             $request = $stmt->fetch();
             
-            // Update order status
             $stmt = $pdo->prepare("UPDATE orders SET status = 'delivered' WHERE id = ?");
             $stmt->execute([$request['order_id']]);
             
@@ -66,23 +63,19 @@ if(isset($_GET['complete']) && isset($_GET['request_id'])) {
 }
 
 // Get statistics
-// Total deliveries completed
 $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM transport_requests WHERE transport_id = ? AND status = 'completed'");
 $stmt->execute([$transport_id]);
 $completed_deliveries = $stmt->fetchColumn();
 
-// Pending deliveries
 $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM transport_requests WHERE transport_id = ? AND status = 'accepted'");
 $stmt->execute([$transport_id]);
 $pending_deliveries = $stmt->fetchColumn();
 
-// Available requests
 $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM transport_requests WHERE status = 'pending'");
 $stmt->execute([]);
 $available_requests = $stmt->fetchColumn();
 
-// Total earnings (you can add delivery fee later)
-$total_earnings = $completed_deliveries * 50; // Example: ₱50 per delivery
+$total_earnings = $completed_deliveries * 50;
 
 // Get available delivery requests
 $available_requests_list = $pdo->prepare("
@@ -154,33 +147,64 @@ $user = $stmt->fetch();
 
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #f5f5f5;
+            background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+            min-height: 100vh;
             overflow-x: hidden;
         }
 
-        /* Sidebar Styles */
+        /* Animated Background */
+        .bg-animation {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            overflow: hidden;
+        }
+
+        .bg-animation .circle {
+            position: absolute;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.05);
+            animation: float 20s infinite;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0) rotate(0deg); }
+            50% { transform: translateY(-50px) rotate(180deg); }
+        }
+
+        /* Sidebar Styles - Transport Theme */
         .sidebar {
             position: fixed;
             left: 0;
             top: 0;
             width: 280px;
             height: 100%;
-            background: linear-gradient(135deg, #e65100, #ef6c00);
+            background: linear-gradient(135deg, #1a2980, #26d0ce);
             color: white;
-            box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+            box-shadow: 5px 0 30px rgba(0,0,0,0.3);
             transition: all 0.3s;
             z-index: 1000;
+            backdrop-filter: blur(10px);
         }
 
         .sidebar-header {
             padding: 30px 20px;
             text-align: center;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
+            border-bottom: 2px solid rgba(255,255,255,0.2);
         }
 
         .sidebar-header i {
-            font-size: 3rem;
+            font-size: 3.5rem;
             margin-bottom: 10px;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
         }
 
         .sidebar-header h3 {
@@ -190,7 +214,7 @@ $user = $stmt->fetch();
 
         .sidebar-header p {
             font-size: 0.85rem;
-            opacity: 0.8;
+            opacity: 0.9;
         }
 
         .sidebar-menu {
@@ -204,10 +228,26 @@ $user = $stmt->fetch();
             display: flex;
             align-items: center;
             gap: 12px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .menu-item::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 0;
+            height: 100%;
+            background: rgba(255,255,255,0.1);
+            transition: width 0.3s;
+        }
+
+        .menu-item:hover::before {
+            width: 100%;
         }
 
         .menu-item:hover {
-            background: rgba(255,255,255,0.1);
             padding-left: 30px;
         }
 
@@ -219,6 +259,26 @@ $user = $stmt->fetch();
         .menu-item i {
             width: 25px;
             font-size: 1.2rem;
+            z-index: 1;
+        }
+
+        .menu-item span {
+            z-index: 1;
+        }
+
+        .badge {
+            background: #ff5722;
+            padding: 2px 8px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            margin-left: auto;
+            z-index: 1;
+            animation: bounce 1s infinite;
+        }
+
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-3px); }
         }
 
         /* Main Content */
@@ -229,18 +289,21 @@ $user = $stmt->fetch();
 
         /* Top Navbar */
         .top-navbar {
-            background: white;
+            background: rgba(255,255,255,0.95);
             padding: 15px 30px;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-radius: 15px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 30px;
+            backdrop-filter: blur(10px);
         }
 
         .page-title h2 {
-            color: #ef6c00;
+            background: linear-gradient(135deg, #1a2980, #26d0ce);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
             font-size: 1.5rem;
         }
 
@@ -252,20 +315,23 @@ $user = $stmt->fetch();
 
         .user-info i {
             font-size: 2rem;
-            color: #ef6c00;
+            background: linear-gradient(135deg, #1a2980, #26d0ce);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
         }
 
         .logout-btn {
-            background: #f44336;
+            background: linear-gradient(135deg, #f44336, #d32f2f);
             color: white;
             padding: 8px 20px;
-            border-radius: 5px;
+            border-radius: 25px;
             text-decoration: none;
             transition: all 0.3s;
         }
 
         .logout-btn:hover {
-            background: #d32f2f;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(244,67,54,0.3);
         }
 
         /* Stats Cards */
@@ -277,23 +343,24 @@ $user = $stmt->fetch();
         }
 
         .stat-card {
-            background: white;
+            background: rgba(255,255,255,0.95);
             padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-radius: 15px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
             display: flex;
             align-items: center;
             justify-content: space-between;
             transition: all 0.3s;
+            backdrop-filter: blur(10px);
         }
 
         .stat-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 5px 20px rgba(0,0,0,0.15);
+            transform: translateY(-10px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.2);
         }
 
         .stat-info h3 {
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             color: #666;
             margin-bottom: 5px;
         }
@@ -301,38 +368,49 @@ $user = $stmt->fetch();
         .stat-number {
             font-size: 2rem;
             font-weight: bold;
-            color: #ef6c00;
+            background: linear-gradient(135deg, #1a2980, #26d0ce);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
         }
 
         .stat-icon i {
-            font-size: 3rem;
-            color: #ff9800;
+            font-size: 2.5rem;
+            color: #26d0ce;
             opacity: 0.7;
         }
 
         /* Sections */
         .section {
-            background: white;
-            border-radius: 10px;
+            background: rgba(255,255,255,0.95);
+            border-radius: 15px;
             padding: 25px;
             margin-bottom: 30px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
             display: none;
+            backdrop-filter: blur(10px);
         }
 
         .section.active {
             display: block;
-            animation: fadeIn 0.5s ease;
+            animation: fadeInUp 0.6s ease;
         }
 
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         .section-title {
             font-size: 1.5rem;
-            color: #ef6c00;
+            background: linear-gradient(135deg, #1a2980, #26d0ce);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
             margin-bottom: 20px;
             padding-bottom: 10px;
             border-bottom: 2px solid #e0e0e0;
@@ -347,23 +425,23 @@ $user = $stmt->fetch();
         }
 
         .delivery-card {
-            background: #f9f9f9;
-            border-radius: 10px;
+            background: white;
+            border-radius: 15px;
             overflow: hidden;
             transition: all 0.3s;
-            border: 1px solid #e0e0e0;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
             position: relative;
         }
 
         .delivery-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+            transform: translateY(-10px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.2);
         }
 
         .delivery-header {
-            background: linear-gradient(135deg, #ef6c00, #e65100);
+            background: linear-gradient(135deg, #1a2980, #26d0ce);
             color: white;
-            padding: 15px;
+            padding: 15px 20px;
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -394,13 +472,21 @@ $user = $stmt->fetch();
             gap: 10px;
             margin-bottom: 12px;
             padding: 8px;
-            background: white;
-            border-radius: 8px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            transition: all 0.3s;
+        }
+
+        .info-row:hover {
+            background: #e8f5e9;
+            transform: translateX(5px);
         }
 
         .info-row i {
             width: 25px;
-            color: #ef6c00;
+            background: linear-gradient(135deg, #1a2980, #26d0ce);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
             margin-top: 3px;
         }
 
@@ -415,38 +501,42 @@ $user = $stmt->fetch();
         }
 
         .delivery-actions {
-            padding: 15px;
+            padding: 15px 20px;
             border-top: 1px solid #e0e0e0;
             display: flex;
             gap: 10px;
         }
 
         .btn-accept {
-            background: #4caf50;
+            background: linear-gradient(135deg, #4caf50, #45a049);
             color: white;
             padding: 10px 20px;
             border: none;
-            border-radius: 5px;
+            border-radius: 25px;
             cursor: pointer;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
             gap: 8px;
             transition: all 0.3s;
+            flex: 1;
+            justify-content: center;
         }
 
         .btn-complete {
-            background: #2196f3;
+            background: linear-gradient(135deg, #2196f3, #1976d2);
             color: white;
             padding: 10px 20px;
             border: none;
-            border-radius: 5px;
+            border-radius: 25px;
             cursor: pointer;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
             gap: 8px;
             transition: all 0.3s;
+            flex: 1;
+            justify-content: center;
         }
 
         .btn-accept:hover, .btn-complete:hover {
@@ -472,13 +562,13 @@ $user = $stmt->fetch();
         }
 
         th {
-            background: #f5f5f5;
-            color: #333;
+            background: linear-gradient(135deg, #1a2980, #26d0ce);
+            color: white;
             font-weight: 600;
         }
 
         tr:hover {
-            background: #f9f9f9;
+            background: #f5f5f5;
         }
 
         .status-badge {
@@ -489,18 +579,35 @@ $user = $stmt->fetch();
             font-weight: 600;
         }
 
-        .status-pending { background: #ff9800; color: white; }
+        .status-pending { background: #ff9800; color: white; animation: blink 1s infinite; }
         .status-accepted { background: #2196f3; color: white; }
         .status-completed { background: #4caf50; color: white; }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
 
         /* Alert Messages */
         .alert {
             padding: 15px;
-            border-radius: 8px;
+            border-radius: 10px;
             margin-bottom: 20px;
             display: flex;
             align-items: center;
             gap: 10px;
+            animation: slideIn 0.5s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateX(-30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
         }
 
         .alert-success {
@@ -523,13 +630,41 @@ $user = $stmt->fetch();
 
         .empty-state i {
             font-size: 4rem;
-            color: #ccc;
+            background: linear-gradient(135deg, #1a2980, #26d0ce);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
             margin-bottom: 20px;
         }
 
         .empty-state p {
             color: #666;
             margin-bottom: 20px;
+        }
+
+        /* Welcome Banner */
+        .welcome-banner {
+            background: linear-gradient(135deg, #1a2980, #26d0ce);
+            color: white;
+            padding: 30px;
+            border-radius: 15px;
+            text-align: center;
+            margin-bottom: 30px;
+            animation: glow 2s infinite;
+        }
+
+        @keyframes glow {
+            0%, 100% { box-shadow: 0 0 20px rgba(38,208,206,0.3); }
+            50% { box-shadow: 0 0 40px rgba(38,208,206,0.6); }
+        }
+
+        .welcome-banner i {
+            font-size: 3rem;
+            margin-bottom: 10px;
+        }
+
+        .welcome-banner h3 {
+            font-size: 1.5rem;
+            margin-bottom: 10px;
         }
 
         /* Responsive */
@@ -550,11 +685,18 @@ $user = $stmt->fetch();
     </style>
 </head>
 <body>
+    <!-- Animated Background -->
+    <div class="bg-animation">
+        <div class="circle" style="width: 300px; height: 300px; top: 10%; left: -100px;"></div>
+        <div class="circle" style="width: 500px; height: 500px; bottom: 20%; right: -150px; animation-duration: 25s;"></div>
+        <div class="circle" style="width: 200px; height: 200px; top: 50%; left: 30%; animation-duration: 15s;"></div>
+    </div>
+
     <!-- Sidebar -->
     <div class="sidebar">
         <div class="sidebar-header">
-            <i class="fas fa-truck"></i>
-            <h3>Transport Panel</h3>
+            <i class="fas fa-truck-fast"></i>
+            <h3>Transport Hub</h3>
             <p><?php echo htmlspecialchars($_SESSION['username']); ?></p>
         </div>
         <div class="sidebar-menu">
@@ -566,19 +708,23 @@ $user = $stmt->fetch();
                 <i class="fas fa-bell"></i>
                 <span>Available Requests</span>
                 <?php if($available_requests > 0): ?>
-                    <span style="background: #ff5722; padding: 2px 8px; border-radius: 20px; font-size: 0.75rem;"><?php echo $available_requests; ?></span>
+                    <span class="badge"><?php echo $available_requests; ?></span>
                 <?php endif; ?>
             </div>
             <div class="menu-item" data-section="active">
                 <i class="fas fa-truck-moving"></i>
-                <span>My Active Deliveries</span>
+                <span>Active Deliveries</span>
                 <?php if($pending_deliveries > 0): ?>
-                    <span style="background: #4caf50; padding: 2px 8px; border-radius: 20px; font-size: 0.75rem;"><?php echo $pending_deliveries; ?></span>
+                    <span class="badge"><?php echo $pending_deliveries; ?></span>
                 <?php endif; ?>
             </div>
             <div class="menu-item" data-section="history">
                 <i class="fas fa-history"></i>
                 <span>Delivery History</span>
+            </div>
+            <div class="menu-item" data-section="earnings">
+                <i class="fas fa-chart-simple"></i>
+                <span>Earnings</span>
             </div>
             <div class="menu-item" data-section="profile">
                 <i class="fas fa-user-circle"></i>
@@ -616,12 +762,18 @@ $user = $stmt->fetch();
 
         <!-- Dashboard Section -->
         <div id="dashboard" class="section active">
-            <h2 class="section-title">Welcome, <?php echo htmlspecialchars($_SESSION['username']); ?>!</h2>
+            <div class="welcome-banner">
+                <i class="fas fa-truck-fast"></i>
+                <h3>Welcome, <?php echo htmlspecialchars($_SESSION['username']); ?>!</h3>
+                <p>You're making a difference by delivering fresh products to customers</p>
+            </div>
+
             <div class="stats-grid">
                 <div class="stat-card">
                     <div class="stat-info">
                         <h3>Available Requests</h3>
                         <div class="stat-number"><?php echo $available_requests; ?></div>
+                        <small>New delivery opportunities</small>
                     </div>
                     <div class="stat-icon">
                         <i class="fas fa-bell"></i>
@@ -631,6 +783,7 @@ $user = $stmt->fetch();
                     <div class="stat-info">
                         <h3>Active Deliveries</h3>
                         <div class="stat-number"><?php echo $pending_deliveries; ?></div>
+                        <small>In progress</small>
                     </div>
                     <div class="stat-icon">
                         <i class="fas fa-truck-moving"></i>
@@ -640,6 +793,7 @@ $user = $stmt->fetch();
                     <div class="stat-info">
                         <h3>Completed Deliveries</h3>
                         <div class="stat-number"><?php echo $completed_deliveries; ?></div>
+                        <small>Successfully delivered</small>
                     </div>
                     <div class="stat-icon">
                         <i class="fas fa-check-circle"></i>
@@ -649,6 +803,7 @@ $user = $stmt->fetch();
                     <div class="stat-info">
                         <h3>Total Earnings</h3>
                         <div class="stat-number">₱<?php echo number_format($total_earnings, 2); ?></div>
+                        <small>Delivery fees earned</small>
                     </div>
                     <div class="stat-icon">
                         <i class="fas fa-money-bill-wave"></i>
@@ -656,11 +811,11 @@ $user = $stmt->fetch();
                 </div>
             </div>
 
-            <div style="background: linear-gradient(135deg, #ef6c00, #e65100); color: white; padding: 30px; border-radius: 10px; text-align: center;">
-                <i class="fas fa-truck" style="font-size: 3rem; margin-bottom: 10px;"></i>
-                <h3>Ready for Delivery!</h3>
-                <p>Accept delivery requests and earn money by delivering fresh products.</p>
-                <a href="#" onclick="showSection('available')" style="display: inline-block; margin-top: 15px; background: white; color: #ef6c00; padding: 10px 20px; border-radius: 5px; text-decoration: none;">
+            <div style="background: linear-gradient(135deg, #1a2980, #26d0ce); color: white; padding: 30px; border-radius: 15px; text-align: center;">
+                <i class="fas fa-trophy" style="font-size: 3rem; margin-bottom: 10px;"></i>
+                <h3>Delivery Star!</h3>
+                <p>You have completed <?php echo $completed_deliveries; ?> deliveries successfully</p>
+                <a href="#" onclick="showSection('available')" style="display: inline-block; margin-top: 15px; background: white; color: #1a2980; padding: 10px 20px; border-radius: 25px; text-decoration: none; font-weight: bold;">
                     <i class="fas fa-bell"></i> View Available Requests
                 </a>
             </div>
@@ -675,7 +830,7 @@ $user = $stmt->fetch();
                         <div class="delivery-card">
                             <div class="delivery-header">
                                 <h4><i class="fas fa-shopping-cart"></i> Order #<?php echo $request['order_id']; ?></h4>
-                                <span class="delivery-badge">New Request</span>
+                                <span class="delivery-badge"><i class="fas fa-clock"></i> New Request</span>
                             </div>
                             <div class="delivery-body">
                                 <div class="delivery-info">
@@ -737,7 +892,7 @@ $user = $stmt->fetch();
                         <div class="delivery-card">
                             <div class="delivery-header">
                                 <h4><i class="fas fa-truck"></i> Delivery #<?php echo $delivery['id']; ?></h4>
-                                <span class="delivery-badge">In Progress</span>
+                                <span class="delivery-badge"><i class="fas fa-spinner fa-pulse"></i> In Progress</span>
                             </div>
                             <div class="delivery-body">
                                 <div class="delivery-info">
@@ -812,8 +967,7 @@ $user = $stmt->fetch();
                                     <td><?php echo htmlspecialchars($history['product_name']); ?></td>
                                     <td><?php echo htmlspecialchars($history['farmer_name']); ?></td>
                                     <td><?php echo htmlspecialchars($history['buyer_name']); ?></td>
-                                    <td><?php echo date('M d, Y', strtotime($history['created_at'])); ?></td>
-                                    <td><span class="status-badge status-completed">Completed</span></td>
+                                    <td><?php echo date('M d, Y', strtotime($history['created_at'])); ?></                                    <td><span class="status-badge status-completed"><i class="fas fa-check-circle"></i> Completed</span></td>
                                 </tr>
                             <?php endwhile; ?>
                         </tbody>
@@ -826,6 +980,54 @@ $user = $stmt->fetch();
                     <p>Start accepting deliveries to build your history!</p>
                 </div>
             <?php endif; ?>
+        </div>
+
+        <!-- Earnings Section -->
+        <div id="earnings" class="section">
+            <h2 class="section-title"><i class="fas fa-chart-line"></i> Earnings Overview</h2>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-info">
+                        <h3>Total Earnings</h3>
+                        <div class="stat-number">₱<?php echo number_format($total_earnings, 2); ?></div>
+                        <small>Overall earnings</small>
+                    </div>
+                    <div class="stat-icon">
+                        <i class="fas fa-money-bill-wave"></i>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-info">
+                        <h3>Completed Deliveries</h3>
+                        <div class="stat-number"><?php echo $completed_deliveries; ?></div>
+                        <small>Successful deliveries</small>
+                    </div>
+                    <div class="stat-icon">
+                        <i class="fas fa-check-circle"></i>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-info">
+                        <h3>Average per Delivery</h3>
+                        <div class="stat-number">₱50.00</div>
+                        <small>Per delivery fee</small>
+                    </div>
+                    <div class="stat-icon">
+                        <i class="fas fa-chart-line"></i>
+                    </div>
+                </div>
+            </div>
+
+            <div style="background: linear-gradient(135deg, #1a2980, #26d0ce); color: white; padding: 30px; border-radius: 15px; text-align: center; margin-top: 20px;">
+                <i class="fas fa-chart-simple" style="font-size: 3rem; margin-bottom: 10px;"></i>
+                <h3>Keep Up the Great Work!</h3>
+                <p>You've earned ₱<?php echo number_format($total_earnings, 2); ?> from <?php echo $completed_deliveries; ?> deliveries</p>
+                <div style="margin-top: 20px;">
+                    <div style="background: rgba(255,255,255,0.2); border-radius: 10px; padding: 10px;">
+                        <small>Next milestone: <?php echo 10 - ($completed_deliveries % 10); ?> more deliveries to earn a bonus!</small>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- Profile Section -->
@@ -853,6 +1055,11 @@ $user = $stmt->fetch();
                             <span><?php echo htmlspecialchars($user['phone'] ?: 'Not provided'); ?></span>
                         </div>
                         <div class="info-row">
+                            <i class="fas fa-map-marker-alt"></i>
+                            <strong>Address:</strong>
+                            <span><?php echo htmlspecialchars($user['address'] ?: 'Not provided'); ?></span>
+                        </div>
+                        <div class="info-row">
                             <i class="fas fa-calendar"></i>
                             <strong>Member since:</strong>
                             <span><?php echo date('F d, Y', strtotime($user['created_at'])); ?></span>
@@ -875,10 +1082,21 @@ $user = $stmt->fetch();
                             <span><?php echo $completed_deliveries > 0 ? '100%' : '0%'; ?></span>
                         </div>
                         <div class="info-row">
+                            <i class="fas fa-tachometer-alt"></i>
+                            <strong>Active Deliveries:</strong>
+                            <span><?php echo $pending_deliveries; ?></span>
+                        </div>
+                        <div class="info-row">
                             <i class="fas fa-money-bill-wave"></i>
                             <strong>Total Earnings:</strong>
                             <span>₱<?php echo number_format($total_earnings, 2); ?></span>
                         </div>
+                        <div class="info-row">
+                            <i class="fas fa-award"></i>
+                            <strong>Rating:</strong>
+                            <span><i class="fas fa-star" style="color: #ffd700;"></i> <i class="fas fa-star" style="color: #ffd700;"></i> <i class="fas fa-star" style="color: #ffd700;"></i> <i class="fas fa-star" style="color: #ffd700;"></i> <i class="fas fa-star" style="color: #ffd700;"></i> (5.0)</span>
+                        </div>
+                        
                     </div>
                 </div>
             </div>
@@ -915,6 +1133,52 @@ $user = $stmt->fetch();
                 alert.style.display = 'none';
             });
         }, 5000);
+
+        // Add animation to stat cards on scroll
+        const observerOptions = {
+            threshold: 0.1,
+            rootMargin: '0px 0px -50px 0px'
+        };
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if(entry.isIntersecting) {
+                    entry.target.style.opacity = '1';
+                    entry.target.style.transform = 'translateY(0)';
+                }
+            });
+        }, observerOptions);
+
+        document.querySelectorAll('.stat-card, .delivery-card').forEach(el => {
+            el.style.opacity = '0';
+            el.style.transform = 'translateY(30px)';
+            el.style.transition = 'all 0.6s ease';
+            observer.observe(el);
+        });
+        
+
+        // Real-time clock update
+        function updateClock() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+            const dateString = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+            const clockElement = document.querySelector('.top-navbar .user-info');
+            if(clockElement && !document.querySelector('.clock-display')) {
+                const clockDiv = document.createElement('div');
+                clockDiv.className = 'clock-display';
+                clockDiv.style.cssText = 'margin-right: 15px; font-size: 0.9rem; color: #666;';
+                clockDiv.innerHTML = `<i class="fas fa-calendar-alt"></i> ${dateString} | <i class="fas fa-clock"></i> ${timeString}`;
+                clockElement.insertBefore(clockDiv, clockElement.firstChild);
+                
+                setInterval(() => {
+                    const now = new Date();
+                    const newTimeString = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+                    const newDateString = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                    clockDiv.innerHTML = `<i class="fas fa-calendar-alt"></i> ${newDateString} | <i class="fas fa-clock"></i> ${newTimeString}`;
+                }, 60000);
+            }
+        }
+        updateClock();
+        
     </script>
 </body>
-</html>
