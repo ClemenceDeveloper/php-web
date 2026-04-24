@@ -12,6 +12,17 @@ $transport_id = $_SESSION['user_id'];
 $success = '';
 $error = '';
 
+// Include notification functions
+require_once __DIR__ . '/../includes/notification_functions.php';
+
+// Get notification data - FIXED: Use $transport_id instead of $user_id
+$unread_count = getUnreadCount($pdo, $transport_id);
+$notifications = getRecentNotifications($pdo, $transport_id, 10);
+
+// Check if profile_image column exists
+$stmt = $pdo->query("SHOW COLUMNS FROM users LIKE 'profile_image'");
+$has_profile_image = $stmt->rowCount() > 0;
+
 // Handle Accept Delivery Request
 if(isset($_GET['accept']) && isset($_GET['request_id'])) {
     $request_id = $_GET['request_id'];
@@ -27,6 +38,18 @@ if(isset($_GET['accept']) && isset($_GET['request_id'])) {
             
             $stmt = $pdo->prepare("UPDATE orders SET status = 'shipped' WHERE id = ?");
             $stmt->execute([$request['order_id']]);
+            
+            // Send notification to buyer
+            $stmt = $pdo->prepare("SELECT buyer_id FROM orders WHERE id = ?");
+            $stmt->execute([$request['order_id']]);
+            $order = $stmt->fetch();
+            
+            notifyUser($pdo, $order['buyer_id'], 
+                "🚚 Delivery on the Way!", 
+                "Your order #" . $request['order_id'] . " has been picked up and is on its way.",
+                "delivery", 
+                "../delivery/track.php?order_id=" . $request['order_id']
+            );
             
             $success = "Delivery request accepted successfully!";
         } else {
@@ -53,6 +76,18 @@ if(isset($_GET['complete']) && isset($_GET['request_id'])) {
             $stmt = $pdo->prepare("UPDATE orders SET status = 'delivered' WHERE id = ?");
             $stmt->execute([$request['order_id']]);
             
+            // Send notification to buyer
+            $stmt = $pdo->prepare("SELECT buyer_id FROM orders WHERE id = ?");
+            $stmt->execute([$request['order_id']]);
+            $order = $stmt->fetch();
+            
+            notifyUser($pdo, $order['buyer_id'], 
+                "📦 Order Delivered!", 
+                "Your order #" . $request['order_id'] . " has been delivered successfully.",
+                "delivery", 
+                "../dashboard/user.php?section=orders"
+            );
+            
             $success = "Delivery completed successfully!";
         } else {
             $error = "Failed to complete delivery!";
@@ -60,6 +95,23 @@ if(isset($_GET['complete']) && isset($_GET['request_id'])) {
     } catch(PDOException $e) {
         $error = "Failed to complete delivery: " . $e->getMessage();
     }
+}
+
+// Mark notification as read
+if(isset($_GET['mark_read']) && isset($_GET['notif_id'])) {
+    $notif_id = $_GET['notif_id'];
+    $stmt = $pdo->prepare("UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?");
+    $stmt->execute([$notif_id, $transport_id]);
+    header("Location: transport.php");
+    exit();
+}
+
+// Mark all as read
+if(isset($_GET['mark_all_read'])) {
+    $stmt = $pdo->prepare("UPDATE notifications SET is_read = 1 WHERE user_id = ?");
+    $stmt->execute([$transport_id]);
+    header("Location: transport.php");
+    exit();
 }
 
 // Get statistics
@@ -130,6 +182,12 @@ $delivery_history->execute([$transport_id]);
 $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
 $stmt->execute([$transport_id]);
 $user = $stmt->fetch();
+
+// Set profile image
+$profile_image = 'https://ui-avatars.com/api/?background=ef6c00&color=fff&name=' . urlencode($user['username']);
+if($has_profile_image && !empty($user['profile_image']) && file_exists(__DIR__ . '/../' . $user['profile_image'])) {
+    $profile_image = '../' . $user['profile_image'];
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -151,6 +209,158 @@ $user = $stmt->fetch();
             min-height: 100vh;
             overflow-x: hidden;
         }
+
+        /* Notification Styles */
+        .notification-icon {
+            position: relative;
+            cursor: pointer;
+            transition: transform 0.3s;
+        }
+        .notification-icon:hover {
+            transform: scale(1.1);
+        }
+        .notification-badge {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            background: #f44336;
+            color: white;
+            border-radius: 50%;
+            padding: 2px 6px;
+            font-size: 10px;
+            min-width: 18px;
+            text-align: center;
+            animation: pulse 1.5s infinite;
+            font-weight: bold;
+        }
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+        .notification-dropdown {
+            position: absolute;
+            top: 55px;
+            right: 20px;
+            width: 400px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            z-index: 1000;
+            display: none;
+            max-height: 500px;
+            overflow-y: auto;
+            border: 1px solid #e0e0e0;
+        }
+        .notification-dropdown.show {
+            display: block;
+            animation: slideDown 0.3s ease;
+        }
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .notification-header {
+            padding: 15px 20px;
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: linear-gradient(135deg, #ef6c00, #e65100);
+            border-radius: 12px 12px 0 0;
+            color: white;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .notification-header strong {
+            font-size: 1rem;
+        }
+        .mark-all-btn {
+            font-size: 0.75rem;
+            color: #ffd700;
+            text-decoration: none;
+            transition: opacity 0.3s;
+        }
+        .mark-all-btn:hover {
+            opacity: 0.8;
+        }
+        .notification-list {
+            max-height: 420px;
+            overflow-y: auto;
+        }
+        .notification-item {
+            padding: 15px 20px;
+            border-bottom: 1px solid #f0f0f0;
+            transition: background 0.3s;
+            text-decoration: none;
+            display: block;
+            cursor: pointer;
+        }
+        .notification-item:hover {
+            background: #f9f9f9;
+        }
+        .notification-item.unread {
+            background: #e3f2fd;
+            border-left: 3px solid #2196f3;
+        }
+        .notification-title {
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #333;
+            font-size: 0.95rem;
+        }
+        .notification-message {
+            font-size: 0.85rem;
+            color: #666;
+            margin-bottom: 5px;
+            line-height: 1.4;
+        }
+        .notification-time {
+            font-size: 0.7rem;
+            color: #999;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .mark-read {
+            float: right;
+            font-size: 0.7rem;
+            color: #2196f3;
+            text-decoration: none;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: #e3f2fd;
+        }
+        .mark-read:hover {
+            background: #bbdef5;
+        }
+        .empty-notifications {
+            text-align: center;
+            padding: 50px 20px;
+            color: #999;
+        }
+        .empty-notifications i {
+            font-size: 3rem;
+            margin-bottom: 15px;
+            color: #ccc;
+        }
+        .notification-footer {
+            padding: 10px 20px;
+            border-top: 1px solid #e0e0e0;
+            text-align: center;
+            background: #f8f9fa;
+            border-radius: 0 0 12px 12px;
+        }
+        .view-all-link {
+            text-decoration: none;
+            color: #ef6c00;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        .notification-type-product { border-left-color: #4caf50 !important; }
+        .notification-type-order { border-left-color: #ff9800 !important; }
+        .notification-type-payment { border-left-color: #2196f3 !important; }
+        .notification-type-delivery { border-left-color: #9c27b0 !important; }
 
         /* Animated Background */
         .bg-animation {
@@ -298,6 +508,9 @@ $user = $stmt->fetch();
             align-items: center;
             margin-bottom: 30px;
             backdrop-filter: blur(10px);
+            position: sticky;
+            top: 0;
+            z-index: 999;
         }
 
         .page-title h2 {
@@ -310,14 +523,15 @@ $user = $stmt->fetch();
         .user-info {
             display: flex;
             align-items: center;
-            gap: 15px;
+            gap: 20px;
+            position: relative;
         }
 
-        .user-info i {
-            font-size: 2rem;
-            background: linear-gradient(135deg, #1a2980, #26d0ce);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+        .user-info img {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            object-fit: cover;
         }
 
         .logout-btn {
@@ -681,6 +895,10 @@ $user = $stmt->fetch();
             .stats-grid {
                 grid-template-columns: 1fr;
             }
+            .notification-dropdown {
+                width: 320px;
+                right: 10px;
+            }
         }
     </style>
 </head>
@@ -740,7 +958,65 @@ $user = $stmt->fetch();
                 <h2><i class="fas fa-truck"></i> Transport Dashboard</h2>
             </div>
             <div class="user-info">
-                <i class="fas fa-user-circle"></i>
+                <!-- Notification Bell -->
+                <div class="notification-icon" onclick="toggleNotifications()">
+                    <i class="fas fa-bell"></i>
+                    <?php if($unread_count > 0): ?>
+                        <span class="notification-badge"><?php echo $unread_count; ?></span>
+                    <?php endif; ?>
+                </div>
+                
+                <!-- Notification Dropdown -->
+                <div class="notification-dropdown" id="notificationDropdown">
+                    <div class="notification-header">
+                        <strong><i class="fas fa-bell"></i> Notifications</strong>
+                        <?php if($unread_count > 0): ?>
+                            <a href="?mark_all_read=1" class="mark-all-btn" onclick="return confirm('Mark all notifications as read?')">
+                                Mark all as read
+                            </a>
+                        <?php endif; ?>
+                    </div>
+                    <div class="notification-list">
+                        <?php if(count($notifications) > 0): ?>
+                            <?php foreach($notifications as $notif): ?>
+                                <a href="<?php echo $notif['link']; ?>" class="notification-item <?php echo $notif['is_read'] ? '' : 'unread'; ?> notification-type-<?php echo $notif['type']; ?>">
+                                    <div class="notification-title">
+                                        <?php echo $notif['title']; ?>
+                                        <?php if(!$notif['is_read']): ?>
+                                            <a href="?mark_read=1&notif_id=<?php echo $notif['id']; ?>" class="mark-read" onclick="event.stopPropagation();">Mark read</a>
+                                        <?php endif; ?>
+                                    </div>
+                                    <div class="notification-message"><?php echo $notif['message']; ?></div>
+                                    <div class="notification-time">
+                                        <i class="fas fa-clock"></i>
+                                        <?php 
+                                        $time = strtotime($notif['created_at']);
+                                        $now = time();
+                                        $diff = $now - $time;
+                                        if($diff < 60) {
+                                            echo "Just now";
+                                        } elseif($diff < 3600) {
+                                            echo floor($diff/60) . " minutes ago";
+                                        } elseif($diff < 86400) {
+                                            echo floor($diff/3600) . " hours ago";
+                                        } else {
+                                            echo date('M d, H:i', $time);
+                                        }
+                                        ?>
+                                    </div>
+                                </a>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <div class="empty-notifications">
+                                <i class="fas fa-bell-slash"></i>
+                                <p>No notifications yet</p>
+                                <small>When you receive notifications, they'll appear here</small>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                
+                <img src="<?php echo $profile_image; ?>" style="width: 40px; height: 40px; border-radius: 50%; object-fit: cover;">
                 <span><?php echo htmlspecialchars($_SESSION['username']); ?></span>
                 <a href="../auth/logout.php" class="logout-btn"><i class="fas fa-sign-out-alt"></i> Logout</a>
             </div>
@@ -967,7 +1243,8 @@ $user = $stmt->fetch();
                                     <td><?php echo htmlspecialchars($history['product_name']); ?></td>
                                     <td><?php echo htmlspecialchars($history['farmer_name']); ?></td>
                                     <td><?php echo htmlspecialchars($history['buyer_name']); ?></td>
-                                    <td><?php echo date('M d, Y', strtotime($history['created_at'])); ?></                                    <td><span class="status-badge status-completed"><i class="fas fa-check-circle"></i> Completed</span></td>
+                                    <td><?php echo date('M d, Y', strtotime($history['created_at'])); ?></td>
+                                    <td><span class="status-badge status-completed"><i class="fas fa-check-circle"></i> Completed</span></td>
                                 </tr>
                             <?php endwhile; ?>
                         </tbody>
@@ -1096,7 +1373,6 @@ $user = $stmt->fetch();
                             <strong>Rating:</strong>
                             <span><i class="fas fa-star" style="color: #ffd700;"></i> <i class="fas fa-star" style="color: #ffd700;"></i> <i class="fas fa-star" style="color: #ffd700;"></i> <i class="fas fa-star" style="color: #ffd700;"></i> <i class="fas fa-star" style="color: #ffd700;"></i> (5.0)</span>
                         </div>
-                        
                     </div>
                 </div>
             </div>
@@ -1127,6 +1403,51 @@ $user = $stmt->fetch();
             });
         });
 
+        // Toggle notifications dropdown
+        function toggleNotifications() {
+            const dropdown = document.getElementById('notificationDropdown');
+            dropdown.classList.toggle('show');
+        }
+        
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const dropdown = document.getElementById('notificationDropdown');
+            const icon = document.querySelector('.notification-icon');
+            if (icon && dropdown && !icon.contains(event.target) && !dropdown.contains(event.target)) {
+                dropdown.classList.remove('show');
+            }
+        });
+
+        function markAsRead(notifId) {
+            fetch('../ajax/mark_notification_read.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: 'notification_id=' + notifId
+            })
+            .then(response => response.json())
+            .then(data => {
+                if(data.success) {
+                    location.reload();
+                }
+            });
+        }
+
+        function markAllNotificationsRead() {
+            if(confirm('Mark all notifications as read?')) {
+                fetch('../ajax/mark_all_read.php', {
+                    method: 'POST'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if(data.success) {
+                        location.reload();
+                    }
+                });
+            }
+        }
+
         // Auto-hide alerts after 5 seconds
         setTimeout(() => {
             document.querySelectorAll('.alert').forEach(alert => {
@@ -1155,7 +1476,6 @@ $user = $stmt->fetch();
             el.style.transition = 'all 0.6s ease';
             observer.observe(el);
         });
-        
 
         // Real-time clock update
         function updateClock() {
@@ -1180,5 +1500,28 @@ $user = $stmt->fetch();
         }
         updateClock();
         
+        // Auto-refresh notifications every 30 seconds
+        setInterval(function() {
+            fetch('../ajax/get_notification_count.php')
+                .then(response => response.json())
+                .then(data => {
+                    const badge = document.querySelector('.notification-badge');
+                    if(data.count > 0) {
+                        if(badge) {
+                            badge.textContent = data.count;
+                        } else {
+                            const icon = document.querySelector('.notification-icon');
+                            const newBadge = document.createElement('span');
+                            newBadge.className = 'notification-badge';
+                            newBadge.textContent = data.count;
+                            icon.appendChild(newBadge);
+                        }
+                    } else if(badge) {
+                        badge.remove();
+                    }
+                })
+                .catch(error => console.log('Error:', error));
+        }, 30000);
     </script>
 </body>
+</html>

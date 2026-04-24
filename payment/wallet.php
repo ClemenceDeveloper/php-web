@@ -323,21 +323,21 @@ $withdrawals->execute([$user_id]);
             
             <div class="balance-section">
                 <p>Current Balance</p>
-                <div class="balance-amount">₱<?php echo number_format($wallet['balance'], 2); ?></div>
+                <div class="balance-amount">FRW<?php echo number_format($wallet['balance'], 2); ?></div>
             </div>
             
             <div class="stats-grid">
                 <div class="stat-item">
                     <div class="stat-label">Total Deposited</div>
-                    <div class="stat-value">₱<?php echo number_format($wallet['total_deposited'], 2); ?></div>
+                    <div class="stat-value">Frw<?php echo number_format($wallet['total_deposited'], 2); ?></div>
                 </div>
                 <div class="stat-item">
                     <div class="stat-label">Total Spent</div>
-                    <div class="stat-value">₱<?php echo number_format($wallet['total_spent'], 2); ?></div>
+                    <div class="stat-value">Frw<?php echo number_format($wallet['total_spent'], 2); ?></div>
                 </div>
                 <div class="stat-item">
                     <div class="stat-label">Available for Withdrawal</div>
-                    <div class="stat-value">₱<?php echo number_format($wallet['balance'], 2); ?></div>
+                    <div class="stat-value">Frw<?php echo number_format($wallet['balance'], 2); ?></div>
                 </div>
             </div>
             
@@ -422,14 +422,16 @@ $withdrawals->execute([$user_id]);
             <?php endif; ?>
             <form method="POST">
                 <div class="form-group">
-                    <label>Amount (₱)</label>
-                    <input type="number" name="deposit_amount" step="0.01" min="10" required placeholder="Minimum ₱10">
+                    <label>Amount (Frw)</label>
+                    <input type="number" name="deposit_amount" step="0.01" min="10" required placeholder="Minimum Frw10">
                 </div>
                 <div class="form-group">
                     <label>Payment Method</label>
                     <select name="payment_method" required>
                         <option value="M-Pesa">M-Pesa</option>
+                        <option value="MTN">MTN</option>
                         <option value="Airtel Money">Airtel Money</option>
+                        <option value="Cash">Cash</option>
                         <option value="Bank Card">Bank Card</option>
                         <option value="Bank Transfer">Bank Transfer</option>
                     </select>
@@ -448,14 +450,16 @@ $withdrawals->execute([$user_id]);
             </div>
             <form method="POST">
                 <div class="form-group">
-                    <label>Amount (₱)</label>
-                    <input type="number" name="withdraw_amount" step="0.01" min="100" max="<?php echo $wallet['balance']; ?>" required placeholder="Min ₱100, Max ₱<?php echo number_format($wallet['balance'], 2); ?>">
+                    <label>Amount (Frw)</label>
+                    <input type="number" name="withdraw_amount" step="0.01" min="100" max="<?php echo $wallet['balance']; ?>" required placeholder="Min Frw100, Max Frw<?php echo number_format($wallet['balance'], 2); ?>">
                 </div>
                 <div class="form-group">
                     <label>Withdrawal Method</label>
                     <select name="withdraw_method" required>
                         <option value="M-Pesa">M-Pesa</option>
+                        <option value="MTN">MTN</option>
                         <option value="Airtel Money">Airtel Money</option>
+                        <option value="Cash">Cash</option>
                         <option value="Bank Transfer">Bank Transfer</option>
                     </select>
                 </div>

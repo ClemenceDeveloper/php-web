@@ -10,6 +10,12 @@ if(!isset($_SESSION['user_id']) || $_SESSION['role'] != 'admin') {
 
 $success = '';
 $error = '';
+// Include notification functions
+require_once __DIR__ . '/../includes/notification_functions.php';
+
+// Get notification data
+$unread_count = getUnreadCount($pdo, $user_id);
+$notifications = getRecentNotifications($pdo, $user_id, 10);
 
 // Handle User Management Actions
 if(isset($_GET['action']) && isset($_GET['user_id'])) {

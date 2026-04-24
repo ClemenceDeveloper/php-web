@@ -12,7 +12,121 @@ $user_id = $_SESSION['user_id'];
 $success = '';
 $error = '';
 
-// Handle Purchase
+// Include notification functions
+require_once __DIR__ . '/../includes/notification_functions.php';
+
+// Get notification data
+$unread_count = getUnreadCount($pdo, $user_id);
+$notifications = getRecentNotifications($pdo, $user_id, 10);
+
+// Check if profile_image column exists
+$stmt = $pdo->query("SHOW COLUMNS FROM users LIKE 'profile_image'");
+$has_profile_image = $stmt->rowCount() > 0;
+
+// Check if product_image column exists
+$stmt = $pdo->query("SHOW COLUMNS FROM products LIKE 'product_image'");
+$has_image_column = $stmt->rowCount() > 0;
+
+// Get user info
+$stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
+$stmt->execute([$user_id]);
+$user = $stmt->fetch();
+
+// Handle Profile Update
+if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['update_profile'])) {
+    $fullname = trim($_POST['fullname']);
+    $phone = trim($_POST['phone']);
+    $address = trim($_POST['address']);
+    $email = trim($_POST['email']);
+    
+    if(empty($fullname) || empty($phone) || empty($address)) {
+        $error = "Please fill in all required fields!";
+    } else {
+        try {
+            $stmt = $pdo->prepare("UPDATE users SET username = ?, phone = ?, address = ?, email = ? WHERE id = ?");
+            $stmt->execute([$fullname, $phone, $address, $email, $user_id]);
+            $success = "Profile updated successfully!";
+            
+            // Update session username
+            $_SESSION['username'] = $fullname;
+            
+            // Refresh user data
+            $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
+            $stmt->execute([$user_id]);
+            $user = $stmt->fetch();
+        } catch(PDOException $e) {
+            $error = "Failed to update profile: " . $e->getMessage();
+        }
+    }
+}
+
+// Handle Password Change
+if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['change_password'])) {
+    $current_password = $_POST['current_password'];
+    $new_password = $_POST['new_password'];
+    $confirm_password = $_POST['confirm_password'];
+    
+    if(empty($current_password) || empty($new_password) || empty($confirm_password)) {
+        $error = "Please fill in all password fields!";
+    } elseif($new_password !== $confirm_password) {
+        $error = "New passwords do not match!";
+    } elseif(strlen($new_password) < 6) {
+        $error = "Password must be at least 6 characters long!";
+    } else {
+        // Verify current password
+        if(password_verify($current_password, $user['password'])) {
+            $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
+            $stmt = $pdo->prepare("UPDATE users SET password = ? WHERE id = ?");
+            $stmt->execute([$hashed_password, $user_id]);
+            $success = "Password changed successfully!";
+        } else {
+            $error = "Current password is incorrect!";
+        }
+    }
+}
+
+// Handle Profile Image Upload
+if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['upload_image']) && $has_profile_image) {
+    if(isset($_FILES['profile_image']) && $_FILES['profile_image']['error'] == 0) {
+        $upload_dir = __DIR__ . '/../assets/uploads/profiles/';
+        if (!file_exists($upload_dir)) {
+            mkdir($upload_dir, 0777, true);
+        }
+        
+        $allowed = ['image/jpeg', 'image/png', 'image/jpg', 'image/gif', 'image/webp'];
+        if (!in_array($_FILES['profile_image']['type'], $allowed)) {
+            $error = "Invalid file type. Only JPG, PNG, GIF, WEBP allowed.";
+        } elseif ($_FILES['profile_image']['size'] > 5 * 1024 * 1024) {
+            $error = "File too large. Max 5MB.";
+        } else {
+            $ext = pathinfo($_FILES['profile_image']['name'], PATHINFO_EXTENSION);
+            $filename = 'buyer_' . $user_id . '_' . time() . '.' . $ext;
+            $filepath = 'assets/uploads/profiles/' . $filename;
+            
+            if (move_uploaded_file($_FILES['profile_image']['tmp_name'], __DIR__ . '/../' . $filepath)) {
+                // Delete old image if exists
+                if(!empty($user['profile_image']) && file_exists(__DIR__ . '/../' . $user['profile_image'])) {
+                    unlink(__DIR__ . '/../' . $user['profile_image']);
+                }
+                
+                $stmt = $pdo->prepare("UPDATE users SET profile_image = ? WHERE id = ?");
+                $stmt->execute([$filepath, $user_id]);
+                $success = "Profile picture updated successfully!";
+                
+                // Refresh user data
+                $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
+                $stmt->execute([$user_id]);
+                $user = $stmt->fetch();
+            } else {
+                $error = "Failed to upload image!";
+            }
+        }
+    } else {
+        $error = "Please select an image to upload!";
+    }
+}
+
+// Handle Purchase - Redirect to payment page
 if(isset($_GET['buy']) && isset($_GET['id'])) {
     $product_id = $_GET['id'];
     
@@ -24,14 +138,34 @@ if(isset($_GET['buy']) && isset($_GET['id'])) {
         
         if($product) {
             // Create order
-            $stmt = $pdo->prepare("INSERT INTO orders (product_id, buyer_id, quantity, total_price, delivery_address) VALUES (?, ?, ?, ?, ?)");
-            $stmt->execute([$product_id, $user_id, $product['quantity'], $product['price'] * $product['quantity'], $_SESSION['address'] ?? '']);
+            $stmt = $pdo->prepare("
+                INSERT INTO orders (product_id, buyer_id, quantity, total_price, delivery_address, status) 
+                VALUES (?, ?, ?, ?, ?, 'pending')
+            ");
+            $stmt->execute([
+                $product_id, 
+                $user_id, 
+                $product['quantity'], 
+                $product['price'] * $product['quantity'], 
+                $user['address'] ?? ''
+            ]);
+            $order_id = $pdo->lastInsertId();
             
-            // Update product status
+            // Update product status to pending
             $stmt = $pdo->prepare("UPDATE products SET status = 'pending' WHERE id = ?");
             $stmt->execute([$product_id]);
             
-            $success = "Order placed successfully! The farmer will confirm your order soon.";
+            // Send notification to farmer
+            notifyUser($pdo, $product['farmer_id'], 
+                "🛒 New Order Received!", 
+                $_SESSION['username'] . " has ordered your product: " . $product['name'],
+                "order", 
+                "../dashboard/farmer.php?section=orders"
+            );
+            
+            // Redirect to payment page
+            header("Location: ../payment/process_payment.php?order_id=" . $order_id);
+            exit();
         } else {
             $error = "Product is no longer available!";
         }
@@ -68,9 +202,9 @@ if(isset($_GET['cancel']) && isset($_GET['order_id'])) {
     }
 }
 
-// Get user's orders
+// Get user's orders with product images
 $orders = $pdo->prepare("
-    SELECT o.*, p.name as product_name, p.price as product_price, p.unit,
+    SELECT o.*, p.name as product_name, p.price as product_price, p.unit, p.product_image,
            u.username as farmer_name, u.phone as farmer_phone
     FROM orders o 
     JOIN products p ON o.product_id = p.id 
@@ -80,7 +214,7 @@ $orders = $pdo->prepare("
 ");
 $orders->execute([$user_id]);
 
-// Get available products
+// Get available products with images
 $products = $pdo->query("
     SELECT p.*, u.username as farmer_name, u.phone as farmer_phone, u.address as farmer_address
     FROM products p 
@@ -106,10 +240,11 @@ $stmt = $pdo->prepare("SELECT SUM(total_price) as total FROM orders WHERE buyer_
 $stmt->execute([$user_id]);
 $total_spent = $stmt->fetchColumn() ?: 0;
 
-// Get user info
-$stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
-$stmt->execute([$user_id]);
-$user = $stmt->fetch();
+// Set profile image
+$profile_image = 'https://ui-avatars.com/api/?background=1976d2&color=fff&name=' . urlencode($user['username']);
+if($has_profile_image && !empty($user['profile_image']) && file_exists(__DIR__ . '/../' . $user['profile_image'])) {
+    $profile_image = '../' . $user['profile_image'];
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -130,6 +265,159 @@ $user = $stmt->fetch();
             background: #f5f5f5;
             overflow-x: hidden;
         }
+
+        /* Notification Styles */
+        .notification-icon {
+            position: relative;
+            cursor: pointer;
+            transition: transform 0.3s;
+        }
+        .notification-icon:hover {
+            transform: scale(1.1);
+        }
+        .notification-badge {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            background: #f44336;
+            color: white;
+            border-radius: 50%;
+            padding: 2px 6px;
+            font-size: 10px;
+            min-width: 18px;
+            text-align: center;
+            animation: pulse 1.5s infinite;
+            font-weight: bold;
+        }
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+        .notification-dropdown {
+            position: absolute;
+            top: 55px;
+            right: 20px;
+            width: 380px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            z-index: 1000;
+            display: none;
+            max-height: 500px;
+            overflow-y: auto;
+            border: 1px solid #e0e0e0;
+        }
+        .notification-dropdown.show {
+            display: block;
+            animation: slideDown 0.3s ease;
+        }
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .notification-header {
+            padding: 15px 20px;
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: linear-gradient(135deg, #1976d2, #1565c0);
+            border-radius: 12px 12px 0 0;
+            color: white;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .notification-header strong {
+            font-size: 1rem;
+        }
+        .mark-all-btn {
+            font-size: 0.75rem;
+            color: #ffd700;
+            text-decoration: none;
+            transition: opacity 0.3s;
+        }
+        .mark-all-btn:hover {
+            opacity: 0.8;
+        }
+        .notification-list {
+            max-height: 420px;
+            overflow-y: auto;
+        }
+        .notification-item {
+            padding: 15px 20px;
+            border-bottom: 1px solid #f0f0f0;
+            transition: background 0.3s;
+            text-decoration: none;
+            display: block;
+            cursor: pointer;
+        }
+        .notification-item:hover {
+            background: #f9f9f9;
+        }
+        .notification-item.unread {
+            background: #e3f2fd;
+            border-left: 3px solid #2196f3;
+        }
+        .notification-title {
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #333;
+            font-size: 0.95rem;
+        }
+        .notification-message {
+            font-size: 0.85rem;
+            color: #666;
+            margin-bottom: 5px;
+            line-height: 1.4;
+        }
+        .notification-time {
+            font-size: 0.7rem;
+            color: #999;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .mark-read {
+            float: right;
+            font-size: 0.7rem;
+            color: #2196f3;
+            text-decoration: none;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: #e3f2fd;
+        }
+        .mark-read:hover {
+            background: #bbdef5;
+        }
+        .empty-notifications {
+            text-align: center;
+            padding: 50px 20px;
+            color: #999;
+        }
+        .empty-notifications i {
+            font-size: 3rem;
+            margin-bottom: 15px;
+            color: #ccc;
+        }
+        .notification-footer {
+            padding: 10px 20px;
+            border-top: 1px solid #e0e0e0;
+            text-align: center;
+            background: #f8f9fa;
+            border-radius: 0 0 12px 12px;
+        }
+        .view-all-link {
+            text-decoration: none;
+            color: #1976d2;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        .notification-type-product { border-left-color: #4caf50 !important; }
+        .notification-type-order { border-left-color: #ff9800 !important; }
+        .notification-type-payment { border-left-color: #2196f3 !important; }
+        .notification-type-delivery { border-left-color: #9c27b0 !important; }
+        .notification-type-wallet { border-left-color: #ff9800 !important; }
 
         /* Sidebar Styles */
         .sidebar {
@@ -210,6 +498,9 @@ $user = $stmt->fetch();
             justify-content: space-between;
             align-items: center;
             margin-bottom: 30px;
+            position: sticky;
+            top: 0;
+            z-index: 999;
         }
 
         .page-title h2 {
@@ -220,12 +511,15 @@ $user = $stmt->fetch();
         .user-info {
             display: flex;
             align-items: center;
-            gap: 15px;
+            gap: 20px;
+            position: relative;
         }
 
-        .user-info i {
-            font-size: 2rem;
-            color: #1976d2;
+        .user-info img {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            object-fit: cover;
         }
 
         .logout-btn {
@@ -311,6 +605,120 @@ $user = $stmt->fetch();
             border-bottom: 2px solid #e0e0e0;
         }
 
+        /* Profile Section Styles */
+        .profile-container {
+            background: white;
+            border-radius: 16px;
+            padding: 25px;
+            margin-bottom: 25px;
+        }
+        
+        .profile-header {
+            display: flex;
+            align-items: center;
+            gap: 25px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+        
+        .profile-avatar {
+            position: relative;
+            display: inline-block;
+        }
+        
+        .profile-avatar img {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 4px solid #1976d2;
+        }
+        
+        .profile-avatar .edit-photo {
+            position: absolute;
+            bottom: 5px;
+            right: 5px;
+            background: #1976d2;
+            color: white;
+            border-radius: 50%;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .profile-avatar .edit-photo:hover {
+            transform: scale(1.1);
+        }
+        
+        .profile-info h2 {
+            color: #1976d2;
+            margin-bottom: 5px;
+        }
+        
+        .profile-info p {
+            color: #666;
+        }
+        
+        .profile-stats {
+            display: flex;
+            gap: 30px;
+            margin-top: 15px;
+        }
+        
+        .profile-stats .stat {
+            text-align: center;
+        }
+        
+        .profile-stats .stat .number {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #1976d2;
+        }
+        
+        .profile-stats .stat .label {
+            font-size: 0.75rem;
+            color: #666;
+        }
+        
+        .profile-form {
+            margin-top: 25px;
+            padding-top: 25px;
+            border-top: 1px solid #e0e0e0;
+        }
+        
+        .profile-form .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .form-actions {
+            display: flex;
+            gap: 15px;
+            margin-top: 20px;
+        }
+        
+        .btn-save {
+            background: linear-gradient(135deg, #1976d2, #1565c0);
+            color: white;
+            padding: 10px 25px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+        
+        .btn-save:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(25,118,210,0.3);
+        }
+
         /* Product Grid */
         .product-grid {
             display: grid;
@@ -320,17 +728,17 @@ $user = $stmt->fetch();
         }
 
         .product-card {
-            background: #f9f9f9;
-            border-radius: 10px;
+            background: white;
+            border-radius: 15px;
             overflow: hidden;
             transition: all 0.3s;
-            border: 1px solid #e0e0e0;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
             position: relative;
         }
 
         .product-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+            transform: translateY(-10px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.2);
         }
 
         .product-badge {
@@ -343,16 +751,28 @@ $user = $stmt->fetch();
             border-radius: 20px;
             font-size: 0.75rem;
             font-weight: bold;
-            z-index: 1;
+            z-index: 10;
         }
 
         .product-image {
-            height: 180px;
+            height: 220px;
             background: linear-gradient(135deg, #667eea, #764ba2);
             display: flex;
             align-items: center;
             justify-content: center;
             position: relative;
+            overflow: hidden;
+        }
+
+        .product-image img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.3s;
+        }
+
+        .product-card:hover .product-image img {
+            transform: scale(1.1);
         }
 
         .product-image i {
@@ -416,9 +836,9 @@ $user = $stmt->fetch();
 
         .btn-buy {
             display: inline-block;
-            background: linear-gradient(135deg, #1976d2, #1565c0);
+            background: linear-gradient(135deg, #4caf50, #45a049);
             color: white;
-            padding: 10px 20px;
+            padding: 12px 20px;
             text-decoration: none;
             border-radius: 8px;
             margin-top: 10px;
@@ -427,11 +847,46 @@ $user = $stmt->fetch();
             transition: all 0.3s;
             border: none;
             cursor: pointer;
+            font-weight: bold;
+            font-size: 1rem;
         }
 
         .btn-buy:hover {
             transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(25,118,210,0.3);
+            box-shadow: 0 5px 15px rgba(76,175,80,0.3);
+        }
+
+        .btn-pay {
+            background: linear-gradient(135deg, #ff9800, #f57c00);
+            color: white;
+            padding: 5px 12px;
+            border-radius: 5px;
+            text-decoration: none;
+            font-size: 0.85rem;
+            display: inline-block;
+            margin-right: 5px;
+            transition: all 0.3s;
+        }
+
+        .btn-pay:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 3px 10px rgba(255,152,0,0.3);
+        }
+
+        .btn-track {
+            background: #2196f3;
+            color: white;
+            padding: 5px 12px;
+            border-radius: 5px;
+            text-decoration: none;
+            font-size: 0.85rem;
+            display: inline-block;
+            transition: all 0.3s;
+        }
+
+        .btn-track:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 3px 10px rgba(33,150,243,0.3);
         }
 
         /* Orders Table */
@@ -461,6 +916,15 @@ $user = $stmt->fetch();
             background: #f9f9f9;
         }
 
+        .product-thumb {
+            width: 50px;
+            height: 50px;
+            object-fit: cover;
+            border-radius: 8px;
+            margin-right: 10px;
+            vertical-align: middle;
+        }
+
         .order-status {
             display: inline-block;
             padding: 4px 12px;
@@ -483,41 +947,11 @@ $user = $stmt->fetch();
             text-decoration: none;
             font-size: 0.85rem;
             transition: all 0.3s;
+            display: inline-block;
         }
 
         .btn-cancel:hover {
             background: #d32f2f;
-        }
-
-        /* Profile Section */
-        .profile-info {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
-        }
-
-        .info-card {
-            background: #f9f9f9;
-            padding: 20px;
-            border-radius: 10px;
-            border: 1px solid #e0e0e0;
-        }
-
-        .info-card h3 {
-            color: #1976d2;
-            margin-bottom: 15px;
-        }
-
-        .info-item {
-            padding: 10px 0;
-            border-bottom: 1px solid #e0e0e0;
-            display: flex;
-            gap: 10px;
-        }
-
-        .info-item i {
-            width: 25px;
-            color: #1976d2;
         }
 
         /* Alert Messages */
@@ -588,6 +1022,37 @@ $user = $stmt->fetch();
             cursor: pointer;
         }
 
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+        }
+        
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 20px;
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+        }
+        
+        .modal-content input {
+            margin: 15px 0;
+            padding: 10px;
+            width: 100%;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+        }
+
         /* Responsive */
         @media (max-width: 768px) {
             .sidebar {
@@ -601,6 +1066,29 @@ $user = $stmt->fetch();
             }
             .stats-grid {
                 grid-template-columns: 1fr;
+            }
+            .product-thumb {
+                width: 40px;
+                height: 40px;
+            }
+            .action-buttons {
+                display: flex;
+                flex-direction: column;
+                gap: 5px;
+            }
+            .profile-header {
+                flex-direction: column;
+                text-align: center;
+            }
+            .profile-stats {
+                justify-content: center;
+            }
+            .profile-form .form-row {
+                grid-template-columns: 1fr;
+            }
+            .notification-dropdown {
+                width: 320px;
+                right: 10px;
             }
         }
     </style>
@@ -640,7 +1128,63 @@ $user = $stmt->fetch();
                 <h2><i class="fas fa-shopping-bag"></i> Buyer Dashboard</h2>
             </div>
             <div class="user-info">
-                <i class="fas fa-user-circle"></i>
+                <!-- Notification Bell -->
+                <div class="notification-icon" onclick="toggleNotifications()">
+                    <i class="fas fa-bell"></i>
+                    <?php if($unread_count > 0): ?>
+                        <span class="notification-badge"><?php echo $unread_count; ?></span>
+                    <?php endif; ?>
+                </div>
+                
+                <!-- Notification Dropdown -->
+                <div class="notification-dropdown" id="notificationDropdown">
+                    <div class="notification-header">
+                        <strong><i class="fas fa-bell"></i> Notifications</strong>
+                        <?php if($unread_count > 0): ?>
+                            <a href="#" class="mark-all-btn" onclick="markAllNotificationsRead(); return false;">Mark all as read</a>
+                        <?php endif; ?>
+                    </div>
+                    <div class="notification-list">
+                        <?php if(count($notifications) > 0): ?>
+                            <?php foreach($notifications as $notif): ?>
+                                <a href="<?php echo $notif['link']; ?>" class="notification-item <?php echo $notif['is_read'] ? '' : 'unread'; ?> notification-type-<?php echo $notif['type']; ?>">
+                                    <div class="notification-title">
+                                        <?php echo $notif['title']; ?>
+                                        <?php if(!$notif['is_read']): ?>
+                                            <span class="mark-read" onclick="event.stopPropagation(); markAsRead(<?php echo $notif['id']; ?>); return false;">Mark read</span>
+                                        <?php endif; ?>
+                                    </div>
+                                    <div class="notification-message"><?php echo $notif['message']; ?></div>
+                                    <div class="notification-time">
+                                        <i class="fas fa-clock"></i>
+                                        <?php 
+                                        $time = strtotime($notif['created_at']);
+                                        $now = time();
+                                        $diff = $now - $time;
+                                        if($diff < 60) {
+                                            echo "Just now";
+                                        } elseif($diff < 3600) {
+                                            echo floor($diff/60) . " minutes ago";
+                                        } elseif($diff < 86400) {
+                                            echo floor($diff/3600) . " hours ago";
+                                        } else {
+                                            echo date('M d, H:i', $time);
+                                        }
+                                        ?>
+                                    </div>
+                                </a>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <div class="empty-notifications">
+                                <i class="fas fa-bell-slash"></i>
+                                <p>No notifications yet</p>
+                                <small>When you receive notifications, they'll appear here</small>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                
+                <img src="<?php echo $profile_image; ?>" alt="Profile">
                 <span><?php echo htmlspecialchars($_SESSION['username']); ?></span>
                 <a href="../auth/logout.php" class="logout-btn"><i class="fas fa-sign-out-alt"></i> Logout</a>
             </div>
@@ -725,7 +1269,11 @@ $user = $stmt->fetch();
                         <div class="product-card" data-name="<?php echo strtolower($product['name']); ?>" data-farmer="<?php echo strtolower($product['farmer_name']); ?>" data-category="<?php echo strtolower($product['category']); ?>">
                             <div class="product-badge">Fresh</div>
                             <div class="product-image">
-                                <i class="fas fa-apple-alt"></i>
+                                <?php if($has_image_column && !empty($product['product_image']) && file_exists(__DIR__ . '/../' . $product['product_image'])): ?>
+                                    <img src="../<?php echo $product['product_image']; ?>" alt="<?php echo htmlspecialchars($product['name']); ?>">
+                                <?php else: ?>
+                                    <i class="fas fa-apple-alt"></i>
+                                <?php endif; ?>
                             </div>
                             <div class="product-info">
                                 <h3><?php echo htmlspecialchars($product['name']); ?></h3>
@@ -743,7 +1291,7 @@ $user = $stmt->fetch();
                                 </div>
                                 <div class="price">₱<?php echo number_format($product['price'], 2); ?></div>
                                 <div class="description"><?php echo htmlspecialchars(substr($product['description'], 0, 100)); ?>...</div>
-                                <a href="?buy=1&id=<?php echo $product['id']; ?>" class="btn-buy" onclick="return confirm('Confirm purchase of <?php echo addslashes($product['name']); ?>?')">
+                                <a href="?buy=1&id=<?php echo $product['id']; ?>" class="btn-buy">
                                     <i class="fas fa-shopping-cart"></i> Buy Now
                                 </a>
                             </div>
@@ -781,7 +1329,12 @@ $user = $stmt->fetch();
                             <?php while($order = $orders->fetch(PDO::FETCH_ASSOC)): ?>
                                 <tr>
                                     <td>#<?php echo $order['id']; ?></td>
-                                    <td><?php echo htmlspecialchars($order['product_name']); ?></td>
+                                    <td>
+                                        <?php if($has_image_column && !empty($order['product_image']) && file_exists(__DIR__ . '/../' . $order['product_image'])): ?>
+                                            <img src="../<?php echo $order['product_image']; ?>" class="product-thumb" alt="<?php echo htmlspecialchars($order['product_name']); ?>">
+                                        <?php endif; ?>
+                                        <?php echo htmlspecialchars($order['product_name']); ?>
+                                    </td>
                                     <td>
                                         <?php echo htmlspecialchars($order['farmer_name']); ?><br>
                                         <small><?php echo htmlspecialchars($order['farmer_phone']); ?></small>
@@ -794,11 +1347,26 @@ $user = $stmt->fetch();
                                         </span>
                                     </td>
                                     <td><?php echo date('M d, Y', strtotime($order['order_date'])); ?></td>
-                                    <td>
+                                    <td class="action-buttons">
                                         <?php if($order['status'] == 'pending'): ?>
+                                            <a href="../payment/process_payment.php?order_id=<?php echo $order['id']; ?>" class="btn-pay">
+                                                <i class="fas fa-credit-card"></i> Pay Now
+                                            </a>
                                             <a href="?cancel=1&order_id=<?php echo $order['id']; ?>" class="btn-cancel" onclick="return confirm('Cancel this order?')">
                                                 <i class="fas fa-times"></i> Cancel
                                             </a>
+                                        <?php elseif($order['status'] == 'confirmed' || $order['status'] == 'shipped'): ?>
+                                            <a href="../delivery/track.php?order_id=<?php echo $order['id']; ?>" class="btn-track">
+                                                <i class="fas fa-truck"></i> Track Order
+                                            </a>
+                                        <?php elseif($order['status'] == 'delivered'): ?>
+                                            <span style="color: #4caf50;">
+                                                <i class="fas fa-check-circle"></i> Received
+                                            </span>
+                                        <?php elseif($order['status'] == 'cancelled'): ?>
+                                            <span style="color: #f44336;">
+                                                <i class="fas fa-times-circle"></i> Cancelled
+                                            </span>
                                         <?php endif; ?>
                                     </td>
                                 </tr>
@@ -817,55 +1385,113 @@ $user = $stmt->fetch();
             <?php endif; ?>
         </div>
 
-        <!-- Profile Section -->
+        <!-- My Profile Section -->
         <div id="profile" class="section">
             <h2 class="section-title"><i class="fas fa-user-circle"></i> My Profile</h2>
-            <div class="profile-info">
-                <div class="info-card">
-                    <h3><i class="fas fa-user"></i> Personal Information</h3>
-                    <div class="info-item">
-                        <i class="fas fa-user"></i>
-                        <strong>Username:</strong> <?php echo htmlspecialchars($user['username']); ?>
+            
+            <div class="profile-container">
+                <div class="profile-header">
+                    <div class="profile-avatar">
+                        <img src="<?php echo $profile_image; ?>" alt="Profile Picture">
+                        <div class="edit-photo" onclick="openImageModal()">
+                            <i class="fas fa-camera"></i>
+                        </div>
                     </div>
-                    <div class="info-item">
-                        <i class="fas fa-envelope"></i>
-                        <strong>Email:</strong> <?php echo htmlspecialchars($user['email']); ?>
-                    </div>
-                    <div class="info-item">
-                        <i class="fas fa-phone"></i>
-                        <strong>Phone:</strong> <?php echo htmlspecialchars($user['phone'] ?: 'Not provided'); ?>
-                    </div>
-                    <div class="info-item">
-                        <i class="fas fa-calendar"></i>
-                        <strong>Member since:</strong> <?php echo date('F d, Y', strtotime($user['created_at'])); ?>
+                    <div class="profile-info">
+                        <h2><?php echo htmlspecialchars($user['username']); ?></h2>
+                        <p><i class="fas fa-envelope"></i> <?php echo htmlspecialchars($user['email']); ?></p>
+                        <p><i class="fas fa-phone"></i> <?php echo htmlspecialchars($user['phone'] ?: 'Not provided'); ?></p>
+                        <div class="profile-stats">
+                            <div class="stat">
+                                <div class="number"><?php echo $total_orders; ?></div>
+                                <div class="label">Orders</div>
+                            </div>
+                            <div class="stat">
+                                <div class="number"><?php echo $delivered_orders; ?></div>
+                                <div class="label">Delivered</div>
+                            </div>
+                            <div class="stat">
+                                <div class="number">₱<?php echo number_format($total_spent, 2); ?></div>
+                                <div class="label">Spent</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
-                <div class="info-card">
-                    <h3><i class="fas fa-map-marker-alt"></i> Delivery Address</h3>
-                    <div class="info-item">
-                        <i class="fas fa-home"></i>
-                        <strong>Address:</strong> <?php echo htmlspecialchars($user['address'] ?: 'No address provided'); ?>
-                    </div>
+
+                <!-- Profile Information Form -->
+                <div class="profile-form">
+                    <h3 style="margin-bottom: 20px; color: #1976d2;">Edit Profile Information</h3>
+                    <form method="POST" action="">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label><i class="fas fa-user"></i> Full Name</label>
+                                <input type="text" name="fullname" value="<?php echo htmlspecialchars($user['username']); ?>" required>
+                            </div>
+                            <div class="form-group">
+                                <label><i class="fas fa-envelope"></i> Email Address</label>
+                                <input type="email" name="email" value="<?php echo htmlspecialchars($user['email']); ?>" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label><i class="fas fa-phone"></i> Phone Number</label>
+                                <input type="tel" name="phone" value="<?php echo htmlspecialchars($user['phone']); ?>" required>
+                            </div>
+                            <div class="form-group">
+                                <label><i class="fas fa-map-marker-alt"></i> Delivery Address</label>
+                                <input type="text" name="address" value="<?php echo htmlspecialchars($user['address']); ?>" required>
+                            </div>
+                        </div>
+                        <div class="form-actions">
+                            <button type="submit" name="update_profile" class="btn-save">
+                                <i class="fas fa-save"></i> Save Changes
+                            </button>
+                        </div>
+                    </form>
                 </div>
-                <div class="info-card">
-                    <h3><i class="fas fa-chart-bar"></i> Shopping Statistics</h3>
-                    <div class="info-item">
-                        <i class="fas fa-shopping-cart"></i>
-                        <strong>Total Orders:</strong> <?php echo $total_orders; ?>
-                    </div>
-                    <div class="info-item">
-                        <i class="fas fa-check-circle"></i>
-                        <strong>Completed Orders:</strong> <?php echo $delivered_orders; ?>
-                    </div>
-                    <div class="info-item">
-                        <i class="fas fa-money-bill-wave"></i>
-                        <strong>Total Spent:</strong> ₱<?php echo number_format($total_spent, 2); ?>
-                    </div>
+
+                <!-- Change Password Form -->
+                <div class="profile-form">
+                    <h3 style="margin-bottom: 20px; color: #1976d2;">Change Password</h3>
+                    <form method="POST" action="">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label><i class="fas fa-lock"></i> Current Password</label>
+                                <input type="password" name="current_password" placeholder="Enter current password" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label><i class="fas fa-key"></i> New Password</label>
+                                <input type="password" name="new_password" placeholder="Enter new password (min 6 characters)" required>
+                            </div>
+                            <div class="form-group">
+                                <label><i class="fas fa-check"></i> Confirm New Password</label>
+                                <input type="password" name="confirm_password" placeholder="Confirm new password" required>
+                            </div>
+                        </div>
+                        <div class="form-actions">
+                            <button type="submit" name="change_password" class="btn-save">
+                                <i class="fas fa-key"></i> Change Password
+                            </button>
+                        </div>
+                    </form>
                 </div>
             </div>
         </div>
     </div>
-    
+
+    <!-- Image Upload Modal -->
+    <div id="imageModal" class="modal">
+        <div class="modal-content">
+            <h3><i class="fas fa-camera"></i> Update Profile Picture</h3>
+            <form method="POST" enctype="multipart/form-data">
+                <input type="file" name="profile_image" accept="image/jpeg,image/png,image/jpg,image/gif,image/webp" required>
+                <button type="submit" name="upload_image" class="btn-save" style="width: 100%;">Upload Photo</button>
+                <button type="button" onclick="closeImageModal()" style="margin-top: 10px; background: #666; color: white; padding: 10px 20px; border: none; border-radius: 8px; cursor: pointer; width: 100%;">Cancel</button>
+            </form>
+        </div>
+    </div>
 
     <script>
         // Section switching
@@ -882,7 +1508,6 @@ $user = $stmt->fetch();
                 }
             });
         }
-        
 
         // Add click handlers
         document.querySelectorAll('.menu-item').forEach(item => {
@@ -910,12 +1535,97 @@ $user = $stmt->fetch();
             });
         }
 
+        // Notification functions
+        function toggleNotifications() {
+            const dropdown = document.getElementById('notificationDropdown');
+            dropdown.classList.toggle('show');
+        }
+        
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const dropdown = document.getElementById('notificationDropdown');
+            const icon = document.querySelector('.notification-icon');
+            if (icon && dropdown && !icon.contains(event.target) && !dropdown.contains(event.target)) {
+                dropdown.classList.remove('show');
+            }
+        });
+
+        function markAsRead(notifId) {
+            fetch('../ajax/mark_notification_read.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: 'notification_id=' + notifId
+            })
+            .then(response => response.json())
+            .then(data => {
+                if(data.success) {
+                    location.reload();
+                }
+            });
+        }
+
+        function markAllNotificationsRead() {
+            if(confirm('Mark all notifications as read?')) {
+                fetch('../ajax/mark_all_read.php', {
+                    method: 'POST'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if(data.success) {
+                        location.reload();
+                    }
+                });
+            }
+        }
+
+        // Image modal functions
+        function openImageModal() {
+            document.getElementById('imageModal').style.display = 'flex';
+        }
+        
+        function closeImageModal() {
+            document.getElementById('imageModal').style.display = 'none';
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('imageModal');
+            if (event.target == modal) {
+                modal.style.display = 'none';
+            }
+        }
+
         // Auto-hide alerts
         setTimeout(() => {
             document.querySelectorAll('.alert').forEach(alert => {
                 alert.style.display = 'none';
             });
         }, 5000);
+        
+        // Auto-refresh notifications every 30 seconds
+        setInterval(function() {
+            fetch('../ajax/get_notification_count.php')
+                .then(response => response.json())
+                .then(data => {
+                    const badge = document.querySelector('.notification-badge');
+                    if(data.count > 0) {
+                        if(badge) {
+                            badge.textContent = data.count;
+                        } else {
+                            const icon = document.querySelector('.notification-icon');
+                            const newBadge = document.createElement('span');
+                            newBadge.className = 'notification-badge';
+                            newBadge.textContent = data.count;
+                            icon.appendChild(newBadge);
+                        }
+                    } else if(badge) {
+                        badge.remove();
+                    }
+                })
+                .catch(error => console.log('Error:', error));
+        }, 30000);
     </script>
 </body>
 </html>
