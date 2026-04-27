@@ -10,6 +10,19 @@ if(!isset($_SESSION['user_id']) || $_SESSION['role'] != 'admin') {
 
 $success = '';
 $error = '';
+// Add at the top of dashboard files (after session start)
+require_once __DIR__ . '/../includes/messaging_functions.php';
+$unread_msg_count = getUnreadMessageCount($pdo, $user_id);
+
+// Add to user-info div
+<a href="../messages.php" class="msg-icon" style="position: relative; text-decoration: none; color: #333; margin-right: 15px;">
+    <i class="fas fa-envelope" style="font-size: 1.3rem;"></i>
+    <?php if($unread_msg_count > 0): ?>
+        <span style="position: absolute; top: -8px; right: -8px; background: #f44336; color: white; border-radius: 50%; padding: 2px 6px; font-size: 10px; min-width: 18px; text-align: center;">
+            <?php echo $unread_msg_count > 9 ? '9+' : $unread_msg_count; ?>
+        </span>
+    <?php endif; ?>
+</a>
 // Include notification functions
 require_once __DIR__ . '/../includes/notification_functions.php';
 

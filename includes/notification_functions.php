@@ -1,122 +1,200 @@
 <?php
-// Notification Functions for all dashboards
-
-function sendNotification($pdo, $user_id, $title, $message, $type, $link) {
-    $stmt = $pdo->prepare("
-        INSERT INTO notifications (user_id, title, message, type, link, created_at) 
-        VALUES (?, ?, ?, ?, ?, NOW())
-    ");
-    return $stmt->execute([$user_id, $title, $message, $type, $link]);
-}
-
-// Send notification to all buyers
-function notifyAllBuyers($pdo, $title, $message, $type, $link) {
-    $stmt = $pdo->prepare("SELECT id FROM users WHERE role = 'user'");
-    $stmt->execute();
-    $buyers = $stmt->fetchAll();
-    
-    foreach($buyers as $buyer) {
-        sendNotification($pdo, $buyer['id'], $title, $message, $type, $link);
-    }
-    return count($buyers);
-}
-
-// Send notification to all farmers
-function notifyAllFarmers($pdo, $title, $message, $type, $link) {
-    $stmt = $pdo->prepare("SELECT id FROM users WHERE role = 'farmer'");
-    $stmt->execute();
-    $farmers = $stmt->fetchAll();
-    
-    foreach($farmers as $farmer) {
-        sendNotification($pdo, $farmer['id'], $title, $message, $type, $link);
-    }
-    return count($farmers);
-}
-
-// Send notification to all transporters
-function notifyAllTransporters($pdo, $title, $message, $type, $link) {
-    $stmt = $pdo->prepare("SELECT id FROM users WHERE role = 'transport'");
-    $stmt->execute();
-    $transporters = $stmt->fetchAll();
-    
-    foreach($transporters as $transporter) {
-        sendNotification($pdo, $transporter['id'], $title, $message, $type, $link);
-    }
-    return count($transporters);
-}
-
-// Send notification to specific user
-function notifyUser($pdo, $user_id, $title, $message, $type, $link) {
-    return sendNotification($pdo, $user_id, $title, $message, $type, $link);
-}
-
 // Get unread notification count
 function getUnreadCount($pdo, $user_id) {
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0");
-    $stmt->execute([$user_id]);
-    return $stmt->fetchColumn();
+    try {
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0");
+        $stmt->execute([$user_id]);
+        return $stmt->fetchColumn();
+    } catch(PDOException $e) {
+        return 0;
+    }
 }
 
-// Get recent notifications - FIXED VERSION
+// Get recent notifications
 function getRecentNotifications($pdo, $user_id, $limit = 10) {
-    // Convert limit to integer to prevent SQL injection
-    $limit = (int)$limit;
-    
-    // Use direct integer in query instead of placeholder for LIMIT
-    $stmt = $pdo->prepare("
-        SELECT * FROM notifications 
-        WHERE user_id = ? 
-        ORDER BY created_at DESC 
-        LIMIT $limit
-    ");
-    $stmt->execute([$user_id]);
-    return $stmt->fetchAll();
+    try {
+        $limit = (int)$limit;
+        $stmt = $pdo->prepare("
+            SELECT * FROM notifications 
+            WHERE user_id = ? 
+            ORDER BY created_at DESC 
+            LIMIT $limit
+        ");
+        $stmt->execute([$user_id]);
+        return $stmt->fetchAll();
+    } catch(PDOException $e) {
+        return [];
+    }
+}
+
+// Send notification
+function sendNotification($pdo, $user_id, $title, $message, $type, $link) {
+    try {
+        $stmt = $pdo->prepare("
+            INSERT INTO notifications (user_id, title, message, type, link) 
+            VALUES (?, ?, ?, ?, ?)
+        ");
+        return $stmt->execute([$user_id, $title, $message, $type, $link]);
+    } catch(PDOException $e) {
+        return false;
+    }
 }
 
 // Mark notification as read
-function markAsRead($pdo, $notification_id, $user_id) {
-    $stmt = $pdo->prepare("UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?");
-    return $stmt->execute([$notification_id, $user_id]);
+function markNotificationRead($pdo, $notification_id, $user_id) {
+    try {
+        $stmt = $pdo->prepare("UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?");
+        return $stmt->execute([$notification_id, $user_id]);
+    } catch(PDOException $e) {
+        return false;
+    }
 }
 
 // Mark all notifications as read
-function markAllAsRead($pdo, $user_id) {
-    $stmt = $pdo->prepare("UPDATE notifications SET is_read = 1 WHERE user_id = ?");
-    return $stmt->execute([$user_id]);
+function markAllNotificationsRead($pdo, $user_id) {
+    try {
+        $stmt = $pdo->prepare("UPDATE notifications SET is_read = 1 WHERE user_id = ?");
+        return $stmt->execute([$user_id]);
+    } catch(PDOException $e) {
+        return false;
+    }
 }
 
-// Delete old notifications (older than 30 days)
-function deleteOldNotifications($pdo) {
-    $stmt = $pdo->prepare("DELETE FROM notifications WHERE created_at < DATE_SUB(NOW(), INTERVAL 30 DAY)");
-    return $stmt->execute();
+// Get unread message count (with error handling)
+function getUnreadMessageCount($pdo, $user_id) {
+    try {
+        // Check if messages table exists
+        $stmt = $pdo->query("SHOW TABLES LIKE 'messages'");
+        if($stmt->rowCount() == 0) {
+            return 0;
+        }
+        
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM messages WHERE receiver_id = ? AND is_read = 0");
+        $stmt->execute([$user_id]);
+        return $stmt->fetchColumn();
+    } catch(PDOException $e) {
+        return 0;
+    }
 }
 
-// Get notification by ID
-function getNotificationById($pdo, $notification_id, $user_id) {
-    $stmt = $pdo->prepare("SELECT * FROM notifications WHERE id = ? AND user_id = ?");
-    $stmt->execute([$notification_id, $user_id]);
-    return $stmt->fetch();
+// Get or create conversation
+function getOrCreateConversation($pdo, $user1_id, $user2_id) {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT id FROM conversations 
+            WHERE (participant1_id = ? AND participant2_id = ?) 
+            OR (participant1_id = ? AND participant2_id = ?)
+        ");
+        $stmt->execute([$user1_id, $user2_id, $user2_id, $user1_id]);
+        $conv = $stmt->fetch();
+        
+        if($conv) {
+            return $conv['id'];
+        } else {
+            $stmt = $pdo->prepare("INSERT INTO conversations (participant1_id, participant2_id) VALUES (?, ?)");
+            $stmt->execute([$user1_id, $user2_id]);
+            return $pdo->lastInsertId();
+        }
+    } catch(PDOException $e) {
+        return 0;
+    }
 }
 
-// Get all notifications with pagination
-function getAllNotifications($pdo, $user_id, $offset = 0, $limit = 20) {
-    $limit = (int)$limit;
-    $offset = (int)$offset;
-    
-    $stmt = $pdo->prepare("
-        SELECT * FROM notifications 
-        WHERE user_id = ? 
-        ORDER BY created_at DESC 
-        LIMIT $limit OFFSET $offset
-    ");
-    $stmt->execute([$user_id]);
-    return $stmt->fetchAll();
+// Send message
+function sendMessage($pdo, $sender_id, $receiver_id, $message) {
+    try {
+        $conv_id = getOrCreateConversation($pdo, $sender_id, $receiver_id);
+        
+        $stmt = $pdo->prepare("
+            INSERT INTO messages (conversation_id, sender_id, receiver_id, message) 
+            VALUES (?, ?, ?, ?)
+        ");
+        $stmt->execute([$conv_id, $sender_id, $receiver_id, $message]);
+        
+        // Update conversation last message
+        $stmt = $pdo->prepare("
+            UPDATE conversations SET last_message = ?, last_message_time = NOW() WHERE id = ?
+        ");
+        $stmt->execute([$message, $conv_id]);
+        
+        // Send notification to receiver
+        $sender_name = getUserName($pdo, $sender_id);
+        sendNotification($pdo, $receiver_id, "New Message from $sender_name", $message, "message", "messages.php");
+        
+        return true;
+    } catch(PDOException $e) {
+        return false;
+    }
 }
 
-// Get total notifications count
-function getTotalNotificationsCount($pdo, $user_id) {
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = ?");
-    $stmt->execute([$user_id]);
-    return $stmt->fetchColumn();
+// Get user conversations
+function getUserConversations($pdo, $user_id) {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT c.*, 
+                   CASE WHEN c.participant1_id = ? THEN c.participant2_id ELSE c.participant1_id END as other_user_id,
+                   u.username as other_username,
+                   u.role as other_role,
+                   (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id AND receiver_id = ? AND is_read = 0) as unread_count
+            FROM conversations c
+            JOIN users u ON u.id = (CASE WHEN c.participant1_id = ? THEN c.participant2_id ELSE c.participant1_id END)
+            WHERE c.participant1_id = ? OR c.participant2_id = ?
+            ORDER BY c.updated_at DESC
+        ");
+        $stmt->execute([$user_id, $user_id, $user_id, $user_id, $user_id]);
+        return $stmt->fetchAll();
+    } catch(PDOException $e) {
+        return [];
+    }
+}
+
+// Get conversation messages
+function getConversationMessages($pdo, $conversation_id, $user_id) {
+    try {
+        // Mark messages as read
+        $stmt = $pdo->prepare("
+            UPDATE messages SET is_read = 1, read_at = NOW() 
+            WHERE conversation_id = ? AND receiver_id = ? AND is_read = 0
+        ");
+        $stmt->execute([$conversation_id, $user_id]);
+        
+        // Get messages
+        $stmt = $pdo->prepare("
+            SELECT m.*, u.username as sender_name 
+            FROM messages m
+            JOIN users u ON m.sender_id = u.id
+            WHERE m.conversation_id = ?
+            ORDER BY m.created_at ASC
+        ");
+        $stmt->execute([$conversation_id]);
+        return $stmt->fetchAll();
+    } catch(PDOException $e) {
+        return [];
+    }
+}
+
+// Get user name by ID
+function getUserName($pdo, $user_id) {
+    try {
+        $stmt = $pdo->prepare("SELECT username FROM users WHERE id = ?");
+        $stmt->execute([$user_id]);
+        $user = $stmt->fetch();
+        return $user ? $user['username'] : 'Unknown';
+    } catch(PDOException $e) {
+        return 'Unknown';
+    }
+}
+
+// Get all users except current
+function getAllUsers($pdo, $current_user_id) {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT id, username, email, phone, role FROM users WHERE id != ? ORDER BY role, username
+        ");
+        $stmt->execute([$current_user_id]);
+        return $stmt->fetchAll();
+    } catch(PDOException $e) {
+        return [];
+    }
 }
 ?>

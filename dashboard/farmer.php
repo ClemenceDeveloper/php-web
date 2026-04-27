@@ -12,10 +12,13 @@ $farmer_id = $_SESSION['user_id'];
 $success = '';
 $error = '';
 
+// Messaging - set to 0 (no unread messages)
+$unread_msg_count = 0;
+
 // Include notification functions
 require_once __DIR__ . '/../includes/notification_functions.php';
 
-// Get notification data - FIXED: Use $farmer_id instead of $user_id
+// Get notification data
 $unread_count = getUnreadCount($pdo, $farmer_id);
 $notifications = getRecentNotifications($pdo, $farmer_id, 10);
 
@@ -27,6 +30,7 @@ $has_profile_image = $stmt->rowCount() > 0;
 $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
 $stmt->execute([$farmer_id]);
 $farmer = $stmt->fetch();
+
 
 // Handle Profile Update
 if($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['update_profile'])) {
@@ -347,6 +351,29 @@ if($has_profile_image && !empty($farmer['profile_image']) && file_exists(__DIR__
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: #f5f5f5;
             overflow-x: hidden;
+        }
+
+        /* Message Icon Styles */
+        .msg-icon {
+            position: relative;
+            text-decoration: none;
+            color: #333;
+            margin-right: 15px;
+        }
+        .msg-icon i {
+            font-size: 1.3rem;
+        }
+        .msg-badge {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            background: #f44336;
+            color: white;
+            border-radius: 50%;
+            padding: 2px 6px;
+            font-size: 10px;
+            min-width: 18px;
+            text-align: center;
         }
 
         /* Notification Styles */
@@ -1138,6 +1165,15 @@ if($has_profile_image && !empty($farmer['profile_image']) && file_exists(__DIR__
                 <h2><i class="fas fa-tractor"></i> Farmer Dashboard</h2>
             </div>
             <div class="user-info">
+                <!-- Message Icon -->
+                <a href="../messages.php" class="msg-icon">
+                    <i class="fas fa-envelope"></i>
+                    <?php if($unread_msg_count > 0): ?>
+                        <span class="msg-badge"><?php echo $unread_msg_count > 9 ? '9+' : $unread_msg_count; ?></span>
+                    <?php endif; ?>
+                </a>
+
+                <!-- Notification Bell -->
                 <div class="notification-icon" onclick="toggleNotifications()">
                     <i class="fas fa-bell"></i>
                     <?php if($unread_count > 0): ?>
